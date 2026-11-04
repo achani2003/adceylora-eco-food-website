@@ -5,18 +5,16 @@
 
 // ------------------------------------------------------------------------------
 // 1. SUPABASE CREDENTIALS CONFIGURATION
-// Replace the placeholder values with your actual project keys from:
-// Supabase Dashboard -> Project Settings -> API
 // ------------------------------------------------------------------------------
-const SUPABASE_URL = 'https://atsfczcijjyswpcotgfb.supabase.co/rest/v1/';
+const SUPABASE_URL = 'https://atsfczcijjyswpcotgfb.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_KVpWRMO4OYH1bcTIb_AD1g_BOPWqvtK';
 
-let supabase = null;
+let supabaseClient = null;
 let isCloudOnline = false;
 
-if (window.supabase && SUPABASE_URL !== 'https://atsfczcijjyswpcotgfb.supabase.co/rest/v1/') {
+if (window.supabase && SUPABASE_URL) {
     try {
-        supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
         isCloudOnline = true;
     } catch (e) {
         console.warn('Supabase initialization failed, falling back to local database:', e);
@@ -84,18 +82,15 @@ function updateCloudStatusUI() {
 // 2. DATA LOADER (SUPABASE -> LOCALSTORAGE FALLBACK)
 // ------------------------------------------------------------------------------
 async function loadData() {
-    if (isCloudOnline && supabase) {
+    if (isCloudOnline && supabaseClient) {
         try {
-            // Fetch Categories
-            const { data: cats, error: catErr } = await supabase.from('categories').select('*');
+            const { data: cats, error: catErr } = await supabaseClient.from('categories').select('*');
             if (catErr) throw catErr;
 
-            // Fetch Products
-            const { data: prods, error: prodErr } = await supabase.from('products').select('*');
+            const { data: prods, error: prodErr } = await supabaseClient.from('products').select('*');
             if (prodErr) throw prodErr;
 
-            // Fetch Sales
-            const { data: salesData, error: salesErr } = await supabase.from('sales').select('*').order('timestamp', { ascending: false });
+            const { data: salesData, error: salesErr } = await supabaseClient.from('sales').select('*').order('timestamp', { ascending: false });
             if (salesErr) throw salesErr;
 
             appState.categories = (cats && cats.length > 0) ? cats : INITIAL_CATEGORIES;
@@ -114,11 +109,11 @@ async function loadData() {
             appState.sales = salesData || [];
             appState.filteredSales = [...appState.sales];
 
-            // Cache to local storage
             saveLocalCache();
-
             renderAllViews();
-            initCharts(appState.products, appState.sales);
+            if (typeof initCharts === 'function') {
+                initCharts(appState.products, appState.sales);
+            }
             return;
         } catch (err) {
             console.error('Failed to load from Supabase, loading from local cache:', err);
@@ -127,7 +122,6 @@ async function loadData() {
         }
     }
 
-    // Fallback: LocalStorage Loader
     const savedCats = localStorage.getItem(STORAGE_KEYS.CATEGORIES);
     const savedProds = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
     const savedSales = localStorage.getItem(STORAGE_KEYS.SALES);
@@ -142,7 +136,6 @@ async function loadData() {
     if (savedSales) {
         appState.sales = JSON.parse(savedSales);
     } else {
-        // Pre-seed 7-day actual sales
         const sampleSales = [];
         const today = new Date();
         const pastDays = [
@@ -173,7 +166,9 @@ async function loadData() {
     appState.filteredSales = [...appState.sales];
     saveLocalCache();
     renderAllViews();
-    initCharts(appState.products, appState.sales);
+    if (typeof initCharts === 'function') {
+        initCharts(appState.products, appState.sales);
+    }
 }
 
 function saveLocalCache() {
@@ -186,20 +181,17 @@ function saveLocalCache() {
 // 3. REALTIME SUBSCRIPTION FOR MULTI-DEVICE SYNC
 // ------------------------------------------------------------------------------
 function setupRealtimeSubscription() {
-    if (!isCloudOnline || !supabase) return;
+    if (!isCloudOnline || !supabaseClient) return;
 
-    supabase
+    supabaseClient
         .channel('adceylora-cloud-sync')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, () => {
-            console.log('Realtime product update detected');
             loadData();
         })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'sales' }, () => {
-            console.log('Realtime sales update detected');
             loadData();
         })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'categories' }, () => {
-            console.log('Realtime categories update detected');
             loadData();
         })
         .subscribe();
@@ -216,7 +208,7 @@ function switchTab(tabId) {
     const activeNav = document.querySelector(`.nav-item[href="#${tabId}"]`);
     if (activeNav) activeNav.classList.add('active');
 
-    if (tabId === 'dashboard') {
+    if (tabId === 'dashboard' && typeof initCharts === 'function') {
         initCharts(appState.products, appState.sales);
     }
 }
@@ -225,8 +217,13 @@ function switchTab(tabId) {
 function toggleTheme() {
     document.body.classList.toggle('light-theme');
     const isLight = document.body.classList.contains('light-theme');
-    document.getElementById('themeIcon').className = isLight ? 'fa-solid fa-sun' : 'fa-solid fa-moon';
-    initCharts(appState.products, appState.sales);
+    const themeIcon = document.getElementById('themeIcon');
+    if (themeIcon) {
+        themeIcon.className = isLight ? 'fa-solid fa-sun' : 'fa-solid fa-moon';
+    }
+    if (typeof initCharts === 'function') {
+        initCharts(appState.products, appState.sales);
+    }
 }
 
 // Global Filter Search
@@ -258,17 +255,25 @@ function renderKPIs() {
     const totalValuation = appState.products.reduce((acc, p) => acc + (p.cost * p.stock), 0);
     const lowStockItems = appState.products.filter(p => p.stock <= p.minStock);
 
-    document.getElementById('statTotalSales').innerText = `LKR ${totalSalesRev.toLocaleString('en-US', {minimumFractionDigits: 2})}`;
-    document.getElementById('statTotalItems').innerText = totalItems;
-    document.getElementById('statActiveSkus').innerText = `${appState.products.length} SKUs සක්‍රීයයි`;
-    document.getElementById('statStockValuation').innerText = `LKR ${totalValuation.toLocaleString('en-US', {minimumFractionDigits: 2})}`;
-    document.getElementById('statLowStockCount').innerText = lowStockItems.length;
-    document.getElementById('alertCount').innerText = lowStockItems.length;
+    const statTotalSales = document.getElementById('statTotalSales');
+    const statTotalItems = document.getElementById('statTotalItems');
+    const statActiveSkus = document.getElementById('statActiveSkus');
+    const statStockValuation = document.getElementById('statStockValuation');
+    const statLowStockCount = document.getElementById('statLowStockCount');
+    const alertCount = document.getElementById('alertCount');
+
+    if (statTotalSales) statTotalSales.innerText = `LKR ${totalSalesRev.toLocaleString('en-US', {minimumFractionDigits: 2})}`;
+    if (statTotalItems) statTotalItems.innerText = totalItems;
+    if (statActiveSkus) statActiveSkus.innerText = `${appState.products.length} SKUs සක්‍රීයයි`;
+    if (statStockValuation) statStockValuation.innerText = `LKR ${totalValuation.toLocaleString('en-US', {minimumFractionDigits: 2})}`;
+    if (statLowStockCount) statLowStockCount.innerText = lowStockItems.length;
+    if (alertCount) alertCount.innerText = lowStockItems.length;
 }
 
 // 2. Products Table
 function renderProductsTable() {
     const tbody = document.getElementById('productsTbody');
+    if (!tbody) return;
     tbody.innerHTML = '';
 
     appState.products.forEach(p => {
@@ -304,6 +309,8 @@ function renderProductsTable() {
 function renderCategories() {
     const grid = document.getElementById('categoryCardsGrid');
     const select = document.getElementById('prodCategory');
+    if (!grid || !select) return;
+
     grid.innerHTML = '';
     select.innerHTML = '';
 
@@ -338,6 +345,7 @@ function renderCategories() {
 // 4. Inventory Table
 function renderInventoryTable() {
     const tbody = document.getElementById('inventoryTbody');
+    if (!tbody) return;
     tbody.innerHTML = '';
 
     appState.products.forEach(p => {
@@ -367,6 +375,7 @@ function renderInventoryTable() {
 // 5. POS Product Grid & Cart
 function renderPosGrid(search = '') {
     const grid = document.getElementById('posGrid');
+    if (!grid) return;
     grid.innerHTML = '';
 
     const filtered = appState.products.filter(p => 
@@ -416,6 +425,7 @@ function addToCart(productId) {
 
 function renderCart() {
     const cartContainer = document.getElementById('cartItems');
+    if (!cartContainer) return;
     cartContainer.innerHTML = '';
     let subtotal = 0;
 
@@ -439,8 +449,10 @@ function renderCart() {
         cartContainer.appendChild(row);
     });
 
-    document.getElementById('cartSubtotal').innerText = `LKR ${subtotal.toFixed(2)}`;
-    document.getElementById('cartTotal').innerText = `LKR ${subtotal.toFixed(2)}`;
+    const cartSubtotal = document.getElementById('cartSubtotal');
+    const cartTotal = document.getElementById('cartTotal');
+    if (cartSubtotal) cartSubtotal.innerText = `LKR ${subtotal.toFixed(2)}`;
+    if (cartTotal) cartTotal.innerText = `LKR ${subtotal.toFixed(2)}`;
 }
 
 function changeCartQty(id, delta) {
@@ -481,18 +493,16 @@ async function checkoutSale() {
         method: 'මුදල් (Cash)'
     };
 
-    if (isCloudOnline && supabase) {
+    if (isCloudOnline && supabaseClient) {
         try {
-            // 1. Insert sale record into Supabase
-            const { error: saleErr } = await supabase.from('sales').insert([newSale]);
+            const { error: saleErr } = await supabaseClient.from('sales').insert([newSale]);
             if (saleErr) throw saleErr;
 
-            // 2. Decrement stock in Supabase
             for (const item of appState.cart) {
                 const prod = appState.products.find(p => p.id === item.id);
                 if (prod) {
                     const newStock = Math.max(0, prod.stock - item.qty);
-                    await supabase.from('products').update({ stock: newStock }).eq('id', prod.id);
+                    await supabaseClient.from('products').update({ stock: newStock }).eq('id', prod.id);
                 }
             }
         } catch (e) {
@@ -500,7 +510,6 @@ async function checkoutSale() {
         }
     }
 
-    // Local update
     appState.cart.forEach(cartItem => {
         const p = appState.products.find(prod => prod.id === cartItem.id);
         if (p) p.stock = Math.max(0, p.stock - cartItem.qty);
@@ -510,37 +519,46 @@ async function checkoutSale() {
     appState.filteredSales = [...appState.sales];
     saveLocalCache();
 
-    // Show printable invoice
     showInvoiceModal(newSale);
 
     appState.cart = [];
     renderCart();
     renderAllViews();
-    initCharts(appState.products, appState.sales);
+    if (typeof initCharts === 'function') {
+        initCharts(appState.products, appState.sales);
+    }
 }
 
 function showInvoiceModal(sale) {
     appState.currentViewingInvoice = sale;
-    document.getElementById('invNumber').innerText = sale.id;
-    document.getElementById('invDate').innerText = `දිනය: ${sale.date}`;
+    const invNumber = document.getElementById('invNumber');
+    const invDate = document.getElementById('invDate');
     const tbody = document.getElementById('invoiceTableBody');
-    tbody.innerHTML = '';
+    const invSubTotalVal = document.getElementById('invSubTotalVal');
+    const invoiceGrandTotal = document.getElementById('invoiceGrandTotal');
 
-    sale.items.forEach((it, index) => {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-            <td class="text-center">${index + 1}</td>
-            <td><strong>${it.name}</strong></td>
-            <td class="text-right">${Number(it.price).toFixed(2)}</td>
-            <td class="text-center">${it.qty}</td>
-            <td class="text-right">${(it.price * it.qty).toFixed(2)}</td>
-        `;
-        tbody.appendChild(tr);
-    });
+    if (invNumber) invNumber.innerText = sale.id;
+    if (invDate) invDate.innerText = `දිනය: ${sale.date}`;
+    if (tbody) {
+        tbody.innerHTML = '';
+        sale.items.forEach((it, index) => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td class="text-center">${index + 1}</td>
+                <td><strong>${it.name}</strong></td>
+                <td class="text-right">${Number(it.price).toFixed(2)}</td>
+                <td class="text-center">${it.qty}</td>
+                <td class="text-right">${(Number(it.price) * Number(it.qty)).toFixed(2)}</td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }
 
-    document.getElementById('invSubTotalVal').innerText = `LKR ${sale.total.toFixed(2)}`;
-    document.getElementById('invoiceGrandTotal').innerText = `LKR ${sale.total.toFixed(2)}`;
-    document.getElementById('invoiceModal').classList.add('active');
+    if (invSubTotalVal) invSubTotalVal.innerText = `LKR ${sale.total.toFixed(2)}`;
+    if (invoiceGrandTotal) invoiceGrandTotal.innerText = `LKR ${sale.total.toFixed(2)}`;
+    
+    const invoiceModal = document.getElementById('invoiceModal');
+    if (invoiceModal) invoiceModal.classList.add('active');
 }
 
 // Direct Invoice PDF Download
@@ -562,6 +580,7 @@ function downloadInvoicePDF() {
 // 6. AI Predictive Insights Engine
 function renderQuickRestockTable() {
     const tbody = document.getElementById('quickRestockTbody');
+    if (!tbody) return;
     tbody.innerHTML = '';
 
     const critical = appState.products.filter(p => p.stock <= p.minStock + 5);
@@ -597,6 +616,7 @@ function renderQuickRestockTable() {
 
 function renderAIInsights() {
     const grid = document.getElementById('aiInsightsGrid');
+    if (!grid) return;
     grid.innerHTML = '';
 
     appState.products.forEach(p => {
@@ -631,6 +651,7 @@ function renderAIInsights() {
 // 7. Reports View with Date Filtering & PDF Export
 function renderSalesHistory() {
     const tbody = document.getElementById('salesHistoryTbody');
+    if (!tbody) return;
     tbody.innerHTML = '';
 
     const list = appState.filteredSales || appState.sales;
@@ -663,9 +684,13 @@ function renderSalesHistory() {
         tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted py-4">තෝරාගත් කාල සීමාව තුළ විකුණුම් වාර්තා නොමැත.</td></tr>`;
     }
 
-    document.getElementById('repFilteredRevenue').innerText = `LKR ${totalRev.toLocaleString('en-US', {minimumFractionDigits: 2})}`;
-    document.getElementById('repFilteredCount').innerText = `${list.length} ගනුදෙනු`;
-    document.getElementById('repFilteredUnits').innerText = `${totalUnits} Units`;
+    const repFilteredRevenue = document.getElementById('repFilteredRevenue');
+    const repFilteredCount = document.getElementById('repFilteredCount');
+    const repFilteredUnits = document.getElementById('repFilteredUnits');
+
+    if (repFilteredRevenue) repFilteredRevenue.innerText = `LKR ${totalRev.toLocaleString('en-US', {minimumFractionDigits: 2})}`;
+    if (repFilteredCount) repFilteredCount.innerText = `${list.length} ගනුදෙනු`;
+    if (repFilteredUnits) repFilteredUnits.innerText = `${totalUnits} Units`;
 }
 
 // Date Filtering Function
@@ -693,8 +718,10 @@ function filterReportsByDate() {
 }
 
 function resetReportDateFilter() {
-    document.getElementById('reportStartDate').value = '';
-    document.getElementById('reportEndDate').value = '';
+    const reportStartDate = document.getElementById('reportStartDate');
+    const reportEndDate = document.getElementById('reportEndDate');
+    if (reportStartDate) reportStartDate.value = '';
+    if (reportEndDate) reportEndDate.value = '';
     appState.filteredSales = [...appState.sales];
     renderSalesHistory();
 }
@@ -710,34 +737,40 @@ function downloadReportsPDF() {
         rangeText = `කාල සීමාව: ${startVal || 'ආරම්භයේ'} සිට ${endVal || 'අද'} දක්වා`;
     }
 
-    document.getElementById('pdfRepDateRange').innerText = rangeText;
-    document.getElementById('pdfRepGenDate').innerText = new Date().toLocaleString();
+    const pdfRepDateRange = document.getElementById('pdfRepDateRange');
+    const pdfRepGenDate = document.getElementById('pdfRepGenDate');
+    if (pdfRepDateRange) pdfRepDateRange.innerText = rangeText;
+    if (pdfRepGenDate) pdfRepGenDate.innerText = new Date().toLocaleString();
 
     let totalRev = 0;
     let totalUnits = 0;
     const pdfTbody = document.getElementById('pdfReportTableBody');
-    pdfTbody.innerHTML = '';
+    if (pdfTbody) {
+        pdfTbody.innerHTML = '';
+        list.forEach(s => {
+            const units = s.items.reduce((acc, it) => acc + it.qty, 0);
+            totalRev += Number(s.total || 0);
+            totalUnits += units;
 
-    list.forEach(s => {
-        const units = s.items.reduce((acc, it) => acc + it.qty, 0);
-        totalRev += Number(s.total || 0);
-        totalUnits += units;
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td>${s.date}</td>
+                <td><strong>${s.id}</strong></td>
+                <td style="text-align:center;">${units}</td>
+                <td style="text-align:right;">LKR ${Number(s.total).toFixed(2)}</td>
+                <td style="text-align:center;">${s.method}</td>
+            `;
+            pdfTbody.appendChild(tr);
+        });
+    }
 
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-            <td>${s.date}</td>
-            <td><strong>${s.id}</strong></td>
-            <td style="text-align:center;">${units}</td>
-            <td style="text-align:right;">LKR ${Number(s.total).toFixed(2)}</td>
-            <td style="text-align:center;">${s.method}</td>
-        `;
-        pdfTbody.appendChild(tr);
-    });
-
-    document.getElementById('pdfRepTotalRev').innerText = `LKR ${totalRev.toLocaleString('en-US', {minimumFractionDigits: 2})}`;
-    document.getElementById('pdfRepTotalUnits').innerText = `${totalUnits} Units`;
+    const pdfRepTotalRev = document.getElementById('pdfRepTotalRev');
+    const pdfRepTotalUnits = document.getElementById('pdfRepTotalUnits');
+    if (pdfRepTotalRev) pdfRepTotalRev.innerText = `LKR ${totalRev.toLocaleString('en-US', {minimumFractionDigits: 2})}`;
+    if (pdfRepTotalUnits) pdfRepTotalUnits.innerText = `${totalUnits} Units`;
 
     const printArea = document.getElementById('reportPrintArea');
+    if (!printArea) return;
     printArea.style.display = 'block';
 
     const opt = {
@@ -755,35 +788,50 @@ function downloadReportsPDF() {
 
 // Modal Handlers
 function openProductModal() {
-    document.getElementById('productForm').reset();
-    document.getElementById('prodId').value = '';
-    document.getElementById('prodDateAdded').value = new Date().toISOString().split('T')[0];
-    document.getElementById('productModalTitle').innerText = 'නව ADCEYLORA නිෂ්පාදනයක් ඇතුළත් කරන්න';
-    document.getElementById('productModal').classList.add('active');
+    const form = document.getElementById('productForm');
+    if (form) form.reset();
+    const prodId = document.getElementById('prodId');
+    const prodDateAdded = document.getElementById('prodDateAdded');
+    const title = document.getElementById('productModalTitle');
+
+    if (prodId) prodId.value = '';
+    if (prodDateAdded) prodDateAdded.value = new Date().toISOString().split('T')[0];
+    if (title) title.innerText = 'නව ADCEYLORA නිෂ්පාදනයක් ඇතුළත් කරන්න';
+    
+    const modal = document.getElementById('productModal');
+    if (modal) modal.classList.add('active');
 }
 
 function openCategoryModal() {
-    document.getElementById('categoryModal').classList.add('active');
+    const modal = document.getElementById('categoryModal');
+    if (modal) modal.classList.add('active');
 }
 
 function openAdjustModal(productId) {
     const p = appState.products.find(x => x.id === productId);
     if (!p) return;
-    document.getElementById('adjProdId').value = p.id;
-    document.getElementById('adjProdDetails').innerText = `භාණ්ඩය: ${p.name} (වත්මන් තොගය: ${p.stock}) - ඇතුළත් කළ දිනය: ${p.dateAdded || 'N/A'}`;
-    document.getElementById('adjustStockModal').classList.add('active');
+    const adjProdId = document.getElementById('adjProdId');
+    const adjProdDetails = document.getElementById('adjProdDetails');
+    if (adjProdId) adjProdId.value = p.id;
+    if (adjProdDetails) adjProdDetails.innerText = `භාණ්ඩය: ${p.name} (වත්මන් තොගය: ${p.stock}) - ඇතුළත් කළ දිනය: ${p.dateAdded || 'N/A'}`;
+    
+    const modal = document.getElementById('adjustStockModal');
+    if (modal) modal.classList.add('active');
 }
 
 function closeModal(modalId) {
-    document.getElementById(modalId).classList.remove('active');
+    const modal = document.getElementById(modalId);
+    if (modal) modal.classList.remove('active');
 }
 
 // Form Submissions: Create / Update in Supabase
 async function handleProductSubmit(e) {
     e.preventDefault();
     const btn = document.getElementById('btnSaveProduct');
-    btn.disabled = true;
-    btn.innerText = 'සුරකිමින්...';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerText = 'සුරකිමින්...';
+    }
 
     const id = document.getElementById('prodId').value;
     const sku = document.getElementById('prodSku').value;
@@ -806,14 +854,14 @@ async function handleProductSubmit(e) {
         min_stock: minStock
     };
 
-    if (isCloudOnline && supabase) {
+    if (isCloudOnline && supabaseClient) {
         try {
             if (id) {
-                const { error } = await supabase.from('products').update(payload).eq('id', id);
+                const { error } = await supabaseClient.from('products').update(payload).eq('id', id);
                 if (error) throw error;
             } else {
                 payload.id = 'prod-' + Date.now();
-                const { error } = await supabase.from('products').insert([payload]);
+                const { error } = await supabaseClient.from('products').insert([payload]);
                 if (error) throw error;
             }
         } catch (err) {
@@ -821,7 +869,6 @@ async function handleProductSubmit(e) {
         }
     }
 
-    // Update local cache
     if (id) {
         const p = appState.products.find(x => x.id === id);
         if (p) Object.assign(p, { sku, name, category, dateAdded, cost, price, stock, minStock });
@@ -830,11 +877,15 @@ async function handleProductSubmit(e) {
     }
 
     saveLocalCache();
-    btn.disabled = false;
-    btn.innerText = 'සුරකින්න';
+    if (btn) {
+        btn.disabled = false;
+        btn.innerText = 'සුරකින්න';
+    }
     closeModal('productModal');
     renderAllViews();
-    initCharts(appState.products, appState.sales);
+    if (typeof initCharts === 'function') {
+        initCharts(appState.products, appState.sales);
+    }
 }
 
 function editProduct(productId) {
@@ -850,15 +901,17 @@ function editProduct(productId) {
     document.getElementById('prodStock').value = p.stock;
     document.getElementById('prodMinStock').value = p.minStock;
     document.getElementById('productModalTitle').innerText = 'නිෂ්පාදන විස්තර යාවත්කාලීන කරන්න';
-    document.getElementById('productModal').classList.add('active');
+    
+    const modal = document.getElementById('productModal');
+    if (modal) modal.classList.add('active');
 }
 
 async function deleteProduct(productId) {
     if (!confirm('මෙම නිෂ්පාදනය නාමාවලියෙන් ඉවත් කිරීමට ඔබට සහතිකද?')) return;
 
-    if (isCloudOnline && supabase) {
+    if (isCloudOnline && supabaseClient) {
         try {
-            const { error } = await supabase.from('products').delete().eq('id', productId);
+            const { error } = await supabaseClient.from('products').delete().eq('id', productId);
             if (error) throw error;
         } catch (e) {
             console.error('Delete error on cloud:', e);
@@ -868,22 +921,26 @@ async function deleteProduct(productId) {
     appState.products = appState.products.filter(p => p.id !== productId);
     saveLocalCache();
     renderAllViews();
-    initCharts(appState.products, appState.sales);
+    if (typeof initCharts === 'function') {
+        initCharts(appState.products, appState.sales);
+    }
 }
 
 async function handleCategorySubmit(e) {
     e.preventDefault();
     const btn = document.getElementById('btnSaveCategory');
-    btn.disabled = true;
-    btn.innerText = 'එක් කරමින්...';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerText = 'එක් කරමින්...';
+    }
 
     const name = document.getElementById('catName').value;
     const desc = document.getElementById('catDesc').value;
     const newCat = { id: 'cat-' + Date.now(), name, desc };
 
-    if (isCloudOnline && supabase) {
+    if (isCloudOnline && supabaseClient) {
         try {
-            const { error } = await supabase.from('categories').insert([newCat]);
+            const { error } = await supabaseClient.from('categories').insert([newCat]);
             if (error) throw error;
         } catch (err) {
             alert('Cloud category insert error: ' + err.message);
@@ -892,8 +949,10 @@ async function handleCategorySubmit(e) {
 
     appState.categories.push(newCat);
     saveLocalCache();
-    btn.disabled = false;
-    btn.innerText = 'එක් කරන්න';
+    if (btn) {
+        btn.disabled = false;
+        btn.innerText = 'එක් කරන්න';
+    }
     closeModal('categoryModal');
     renderAllViews();
 }
@@ -901,8 +960,10 @@ async function handleCategorySubmit(e) {
 async function handleStockAdjustSubmit(e) {
     e.preventDefault();
     const btn = document.getElementById('btnConfirmAdjust');
-    btn.disabled = true;
-    btn.innerText = 'යාවත්කාලීන කරමින්...';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerText = 'යාවත්කාලීන කරමින්...';
+    }
 
     const id = document.getElementById('adjProdId').value;
     const type = document.getElementById('adjType').value;
@@ -916,9 +977,9 @@ async function handleStockAdjustSubmit(e) {
     else if (type === 'sub') newStock = Math.max(0, newStock - qty);
     else if (type === 'set') newStock = qty;
 
-    if (isCloudOnline && supabase) {
+    if (isCloudOnline && supabaseClient) {
         try {
-            const { error } = await supabase.from('products').update({ stock: newStock }).eq('id', id);
+            const { error } = await supabaseClient.from('products').update({ stock: newStock }).eq('id', id);
             if (error) throw error;
         } catch (err) {
             console.error('Cloud stock update error:', err);
@@ -927,11 +988,15 @@ async function handleStockAdjustSubmit(e) {
 
     prod.stock = newStock;
     saveLocalCache();
-    btn.disabled = false;
-    btn.innerText = 'තහවුරු කරන්න';
+    if (btn) {
+        btn.disabled = false;
+        btn.innerText = 'තහවුරු කරන්න';
+    }
     closeModal('adjustStockModal');
     renderAllViews();
-    initCharts(appState.products, appState.sales);
+    if (typeof initCharts === 'function') {
+        initCharts(appState.products, appState.sales);
+    }
 }
 
 // Export CSV Feature with Brand Name Header & dateAdded
@@ -953,3 +1018,29 @@ function exportDataCSV() {
     link.click();
     document.body.removeChild(link);
 }
+
+// ------------------------------------------------------------------------------
+// GLOBAL WINDOW SCOPE ATTACHMENTS FOR INLINE HTML HANDLERS
+// ------------------------------------------------------------------------------
+window.switchTab = switchTab;
+window.toggleTheme = toggleTheme;
+window.handleGlobalSearch = handleGlobalSearch;
+window.openProductModal = openProductModal;
+window.openCategoryModal = openCategoryModal;
+window.openAdjustModal = openAdjustModal;
+window.closeModal = closeModal;
+window.editProduct = editProduct;
+window.deleteProduct = deleteProduct;
+window.handleProductSubmit = handleProductSubmit;
+window.handleCategorySubmit = handleCategorySubmit;
+window.handleStockAdjustSubmit = handleStockAdjustSubmit;
+window.addToCart = addToCart;
+window.changeCartQty = changeCartQty;
+window.clearCart = clearCart;
+window.checkoutSale = checkoutSale;
+window.showInvoiceModal = showInvoiceModal;
+window.downloadInvoicePDF = downloadInvoicePDF;
+window.filterReportsByDate = filterReportsByDate;
+window.resetReportDateFilter = resetReportDateFilter;
+window.downloadReportsPDF = downloadReportsPDF;
+window.exportDataCSV = exportDataCSV;
