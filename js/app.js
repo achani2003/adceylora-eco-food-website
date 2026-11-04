@@ -1,11 +1,36 @@
-// Main Application Logic & AI Predictive Engine for ADCEYLORA ECO FOOD
+// ==============================================================================
+// ADCEYLORA ECO FOOD - Complete Inventory Management System
+// Supabase Cloud Integration with Offline Fallback & Realtime Sync
+// ==============================================================================
+
+// ------------------------------------------------------------------------------
+// 1. SUPABASE CREDENTIALS CONFIGURATION
+// Replace the placeholder values with your actual project keys from:
+// Supabase Dashboard -> Project Settings -> API
+// ------------------------------------------------------------------------------
+const SUPABASE_URL = 'https://atsfczcijjyswpcotgfb.supabase.co/rest/v1/';
+const SUPABASE_ANON_KEY = 'sb_publishable_KVpWRMO4OYH1bcTIb_AD1g_BOPWqvtK';
+
+let supabase = null;
+let isCloudOnline = false;
+
+if (window.supabase && SUPABASE_URL !== 'https://atsfczcijjyswpcotgfb.supabase.co/rest/v1/') {
+    try {
+        supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        isCloudOnline = true;
+    } catch (e) {
+        console.warn('Supabase initialization failed, falling back to local database:', e);
+        isCloudOnline = false;
+    }
+}
+
 const STORAGE_KEYS = {
     PRODUCTS: 'adceylora_products',
     CATEGORIES: 'adceylora_categories',
     SALES: 'adceylora_sales'
 };
 
-// Initial Seed Data reflecting ADCEYLORA ECO FOOD product line with addedDate
+// Initial Seed Data reflecting ADCEYLORA ECO FOOD product line
 const INITIAL_CATEGORIES = [
     { id: 'cat-1', name: 'Dehydrated Foods (විජලනය කළ ආහාර)', desc: 'විජලනය කළ කොස්, පළතුරු සහ එළවළු' },
     { id: 'cat-2', name: 'Herbal & Ayurvedic (දේශීය ඖෂධීය කුඩු)', desc: 'හීන් බෝවිටියා, මුරුංගා ආදී ඖෂධීය කුඩු' },
@@ -31,13 +56,78 @@ let appState = {
 };
 
 // Application Initialization
-document.addEventListener('DOMContentLoaded', () => {
-    loadData();
-    renderAllViews();
-    initCharts(appState.products, appState.sales);
+document.addEventListener('DOMContentLoaded', async () => {
+    updateCloudStatusUI();
+    await loadData();
+    setupRealtimeSubscription();
 });
 
-function loadData() {
+function updateCloudStatusUI() {
+    const badge = document.getElementById('cloudStatusBadge');
+    const txt = document.getElementById('cloudStatusText');
+    if (!badge || !txt) return;
+
+    if (isCloudOnline) {
+        badge.style.background = 'rgba(16, 185, 129, 0.15)';
+        badge.style.borderColor = 'rgba(16, 185, 129, 0.3)';
+        badge.style.color = '#10b981';
+        txt.innerHTML = '<i class="fa-solid fa-cloud"></i> Supabase Cloud Online';
+    } else {
+        badge.style.background = 'rgba(245, 158, 11, 0.15)';
+        badge.style.borderColor = 'rgba(245, 158, 11, 0.3)';
+        badge.style.color = '#f59e0b';
+        txt.innerHTML = '<i class="fa-solid fa-hard-drive"></i> Local Storage Mode';
+    }
+}
+
+// ------------------------------------------------------------------------------
+// 2. DATA LOADER (SUPABASE -> LOCALSTORAGE FALLBACK)
+// ------------------------------------------------------------------------------
+async function loadData() {
+    if (isCloudOnline && supabase) {
+        try {
+            // Fetch Categories
+            const { data: cats, error: catErr } = await supabase.from('categories').select('*');
+            if (catErr) throw catErr;
+
+            // Fetch Products
+            const { data: prods, error: prodErr } = await supabase.from('products').select('*');
+            if (prodErr) throw prodErr;
+
+            // Fetch Sales
+            const { data: salesData, error: salesErr } = await supabase.from('sales').select('*').order('timestamp', { ascending: false });
+            if (salesErr) throw salesErr;
+
+            appState.categories = (cats && cats.length > 0) ? cats : INITIAL_CATEGORIES;
+            appState.products = (prods || []).map(p => ({
+                id: p.id,
+                sku: p.sku,
+                name: p.name,
+                category: p.category,
+                cost: Number(p.cost),
+                price: Number(p.price),
+                stock: Number(p.stock),
+                minStock: Number(p.min_stock),
+                dateAdded: p.date_added
+            }));
+
+            appState.sales = salesData || [];
+            appState.filteredSales = [...appState.sales];
+
+            // Cache to local storage
+            saveLocalCache();
+
+            renderAllViews();
+            initCharts(appState.products, appState.sales);
+            return;
+        } catch (err) {
+            console.error('Failed to load from Supabase, loading from local cache:', err);
+            isCloudOnline = false;
+            updateCloudStatusUI();
+        }
+    }
+
+    // Fallback: LocalStorage Loader
     const savedCats = localStorage.getItem(STORAGE_KEYS.CATEGORIES);
     const savedProds = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
     const savedSales = localStorage.getItem(STORAGE_KEYS.SALES);
@@ -45,7 +135,6 @@ function loadData() {
     appState.categories = savedCats ? JSON.parse(savedCats) : INITIAL_CATEGORIES;
     appState.products = savedProds ? JSON.parse(savedProds) : INITIAL_PRODUCTS;
 
-    // Ensure all products have dateAdded field
     appState.products.forEach(p => {
         if (!p.dateAdded) p.dateAdded = new Date().toISOString().split('T')[0];
     });
@@ -53,7 +142,7 @@ function loadData() {
     if (savedSales) {
         appState.sales = JSON.parse(savedSales);
     } else {
-        // Pre-seed actual sales across the past 7 days for ADCEYLORA products
+        // Pre-seed 7-day actual sales
         const sampleSales = [];
         const today = new Date();
         const pastDays = [
@@ -82,13 +171,38 @@ function loadData() {
     }
 
     appState.filteredSales = [...appState.sales];
-    saveData();
+    saveLocalCache();
+    renderAllViews();
+    initCharts(appState.products, appState.sales);
 }
 
-function saveData() {
+function saveLocalCache() {
     localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(appState.categories));
     localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(appState.products));
     localStorage.setItem(STORAGE_KEYS.SALES, JSON.stringify(appState.sales));
+}
+
+// ------------------------------------------------------------------------------
+// 3. REALTIME SUBSCRIPTION FOR MULTI-DEVICE SYNC
+// ------------------------------------------------------------------------------
+function setupRealtimeSubscription() {
+    if (!isCloudOnline || !supabase) return;
+
+    supabase
+        .channel('adceylora-cloud-sync')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, () => {
+            console.log('Realtime product update detected');
+            loadData();
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'sales' }, () => {
+            console.log('Realtime sales update detected');
+            loadData();
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'categories' }, () => {
+            console.log('Realtime categories update detected');
+            loadData();
+        })
+        .subscribe();
 }
 
 // Navigation between views
@@ -139,8 +253,8 @@ function renderAllViews() {
 
 // 1. KPIs
 function renderKPIs() {
-    const totalSalesRev = appState.sales.reduce((acc, curr) => acc + curr.total, 0);
-    const totalItems = appState.products.reduce((acc, p) => acc + Number(p.stock), 0);
+    const totalSalesRev = appState.sales.reduce((acc, curr) => acc + Number(curr.total || 0), 0);
+    const totalItems = appState.products.reduce((acc, p) => acc + Number(p.stock || 0), 0);
     const totalValuation = appState.products.reduce((acc, p) => acc + (p.cost * p.stock), 0);
     const lowStockItems = appState.products.filter(p => p.stock <= p.minStock);
 
@@ -152,7 +266,7 @@ function renderKPIs() {
     document.getElementById('alertCount').innerText = lowStockItems.length;
 }
 
-// 2. Products Table (Includes dateAdded)
+// 2. Products Table
 function renderProductsTable() {
     const tbody = document.getElementById('productsTbody');
     tbody.innerHTML = '';
@@ -347,7 +461,8 @@ function clearCart() {
     renderCart();
 }
 
-function checkoutSale() {
+// POS Checkout: Syncs to Supabase & decrements stock
+async function checkoutSale() {
     if (appState.cart.length === 0) {
         alert('බිල්පතක් සෑදීමට කරුණාකර අවම වශයෙන් එක් භාණ්ඩයක් තෝරන්න.');
         return;
@@ -355,27 +470,45 @@ function checkoutSale() {
 
     const total = appState.cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
     const saleId = 'ADCEY-INV-' + Math.floor(100000 + Math.random() * 900000);
-    const dateStr = new Date().toLocaleString();
+    const now = new Date();
 
-    // Deduct inventory
-    appState.cart.forEach(cartItem => {
-        const p = appState.products.find(prod => prod.id === cartItem.id);
-        if (p) p.stock -= cartItem.qty;
-    });
-
-    const nowIso = new Date().toISOString();
     const newSale = {
         id: saleId,
-        date: dateStr,
-        timestamp: nowIso,
+        date: now.toLocaleString(),
+        timestamp: now.toISOString(),
         items: [...appState.cart],
         total: total,
         method: 'මුදල් (Cash)'
     };
 
+    if (isCloudOnline && supabase) {
+        try {
+            // 1. Insert sale record into Supabase
+            const { error: saleErr } = await supabase.from('sales').insert([newSale]);
+            if (saleErr) throw saleErr;
+
+            // 2. Decrement stock in Supabase
+            for (const item of appState.cart) {
+                const prod = appState.products.find(p => p.id === item.id);
+                if (prod) {
+                    const newStock = Math.max(0, prod.stock - item.qty);
+                    await supabase.from('products').update({ stock: newStock }).eq('id', prod.id);
+                }
+            }
+        } catch (e) {
+            console.error('Failed to sync sale to cloud, saving locally:', e);
+        }
+    }
+
+    // Local update
+    appState.cart.forEach(cartItem => {
+        const p = appState.products.find(prod => prod.id === cartItem.id);
+        if (p) p.stock = Math.max(0, p.stock - cartItem.qty);
+    });
+
     appState.sales.unshift(newSale);
     appState.filteredSales = [...appState.sales];
-    saveData();
+    saveLocalCache();
 
     // Show printable invoice
     showInvoiceModal(newSale);
@@ -587,7 +720,7 @@ function downloadReportsPDF() {
 
     list.forEach(s => {
         const units = s.items.reduce((acc, it) => acc + it.qty, 0);
-        totalRev += s.total;
+        totalRev += Number(s.total || 0);
         totalUnits += units;
 
         const tr = document.createElement('tr');
@@ -595,7 +728,7 @@ function downloadReportsPDF() {
             <td>${s.date}</td>
             <td><strong>${s.id}</strong></td>
             <td style="text-align:center;">${units}</td>
-            <td style="text-align:right;">LKR ${s.total.toFixed(2)}</td>
+            <td style="text-align:right;">LKR ${Number(s.total).toFixed(2)}</td>
             <td style="text-align:center;">${s.method}</td>
         `;
         pdfTbody.appendChild(tr);
@@ -645,9 +778,13 @@ function closeModal(modalId) {
     document.getElementById(modalId).classList.remove('active');
 }
 
-// Form Submissions
-function handleProductSubmit(e) {
+// Form Submissions: Create / Update in Supabase
+async function handleProductSubmit(e) {
     e.preventDefault();
+    const btn = document.getElementById('btnSaveProduct');
+    btn.disabled = true;
+    btn.innerText = 'සුරකිමින්...';
+
     const id = document.getElementById('prodId').value;
     const sku = document.getElementById('prodSku').value;
     const name = document.getElementById('prodName').value;
@@ -658,20 +795,43 @@ function handleProductSubmit(e) {
     const stock = parseInt(document.getElementById('prodStock').value);
     const minStock = parseInt(document.getElementById('prodMinStock').value);
 
-    if (id) {
-        const p = appState.products.find(x => x.id === id);
-        if (p) {
-            Object.assign(p, { sku, name, category, dateAdded, cost, price, stock, minStock });
+    const payload = {
+        sku,
+        name,
+        category,
+        date_added: dateAdded,
+        cost,
+        price,
+        stock,
+        min_stock: minStock
+    };
+
+    if (isCloudOnline && supabase) {
+        try {
+            if (id) {
+                const { error } = await supabase.from('products').update(payload).eq('id', id);
+                if (error) throw error;
+            } else {
+                payload.id = 'prod-' + Date.now();
+                const { error } = await supabase.from('products').insert([payload]);
+                if (error) throw error;
+            }
+        } catch (err) {
+            alert('Cloud Sync Error: ' + err.message);
         }
-    } else {
-        const newProduct = {
-            id: 'prod-' + Date.now(),
-            sku, name, category, dateAdded, cost, price, stock, minStock
-        };
-        appState.products.push(newProduct);
     }
 
-    saveData();
+    // Update local cache
+    if (id) {
+        const p = appState.products.find(x => x.id === id);
+        if (p) Object.assign(p, { sku, name, category, dateAdded, cost, price, stock, minStock });
+    } else {
+        appState.products.push({ id: payload.id || ('prod-' + Date.now()), sku, name, category, dateAdded, cost, price, stock, minStock });
+    }
+
+    saveLocalCache();
+    btn.disabled = false;
+    btn.innerText = 'සුරකින්න';
     closeModal('productModal');
     renderAllViews();
     initCharts(appState.products, appState.sales);
@@ -693,28 +853,57 @@ function editProduct(productId) {
     document.getElementById('productModal').classList.add('active');
 }
 
-function deleteProduct(productId) {
-    if (confirm('මෙම නිෂ්පාදනය නාමාවලියෙන් ඉවත් කිරීමට ඔබට සහතිකද?')) {
-        appState.products = appState.products.filter(p => p.id !== productId);
-        saveData();
-        renderAllViews();
-        initCharts(appState.products, appState.sales);
+async function deleteProduct(productId) {
+    if (!confirm('මෙම නිෂ්පාදනය නාමාවලියෙන් ඉවත් කිරීමට ඔබට සහතිකද?')) return;
+
+    if (isCloudOnline && supabase) {
+        try {
+            const { error } = await supabase.from('products').delete().eq('id', productId);
+            if (error) throw error;
+        } catch (e) {
+            console.error('Delete error on cloud:', e);
+        }
     }
+
+    appState.products = appState.products.filter(p => p.id !== productId);
+    saveLocalCache();
+    renderAllViews();
+    initCharts(appState.products, appState.sales);
 }
 
-function handleCategorySubmit(e) {
+async function handleCategorySubmit(e) {
     e.preventDefault();
+    const btn = document.getElementById('btnSaveCategory');
+    btn.disabled = true;
+    btn.innerText = 'එක් කරමින්...';
+
     const name = document.getElementById('catName').value;
     const desc = document.getElementById('catDesc').value;
+    const newCat = { id: 'cat-' + Date.now(), name, desc };
 
-    appState.categories.push({ id: 'cat-' + Date.now(), name, desc });
-    saveData();
+    if (isCloudOnline && supabase) {
+        try {
+            const { error } = await supabase.from('categories').insert([newCat]);
+            if (error) throw error;
+        } catch (err) {
+            alert('Cloud category insert error: ' + err.message);
+        }
+    }
+
+    appState.categories.push(newCat);
+    saveLocalCache();
+    btn.disabled = false;
+    btn.innerText = 'එක් කරන්න';
     closeModal('categoryModal');
     renderAllViews();
 }
 
-function handleStockAdjustSubmit(e) {
+async function handleStockAdjustSubmit(e) {
     e.preventDefault();
+    const btn = document.getElementById('btnConfirmAdjust');
+    btn.disabled = true;
+    btn.innerText = 'යාවත්කාලීන කරමින්...';
+
     const id = document.getElementById('adjProdId').value;
     const type = document.getElementById('adjType').value;
     const qty = parseInt(document.getElementById('adjQty').value);
@@ -722,11 +911,24 @@ function handleStockAdjustSubmit(e) {
     const prod = appState.products.find(p => p.id === id);
     if (!prod) return;
 
-    if (type === 'add') prod.stock += qty;
-    else if (type === 'sub') prod.stock = Math.max(0, prod.stock - qty);
-    else if (type === 'set') prod.stock = qty;
+    let newStock = prod.stock;
+    if (type === 'add') newStock += qty;
+    else if (type === 'sub') newStock = Math.max(0, newStock - qty);
+    else if (type === 'set') newStock = qty;
 
-    saveData();
+    if (isCloudOnline && supabase) {
+        try {
+            const { error } = await supabase.from('products').update({ stock: newStock }).eq('id', id);
+            if (error) throw error;
+        } catch (err) {
+            console.error('Cloud stock update error:', err);
+        }
+    }
+
+    prod.stock = newStock;
+    saveLocalCache();
+    btn.disabled = false;
+    btn.innerText = 'තහවුරු කරන්න';
     closeModal('adjustStockModal');
     renderAllViews();
     initCharts(appState.products, appState.sales);

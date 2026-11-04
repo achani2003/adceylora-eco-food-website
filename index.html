@@ -4,14 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ADCEYLORA ECO FOOD | ස්මාර්ට් තොග සහ ව්‍යාපාර කළමනාකරණ පද්ධතිය</title>
-    <!-- FontAwesome & Fonts -->
+    <!-- FontAwesome & Google Fonts -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Noto+Sans+Sinhala:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="css/style.css">
-    <!-- Chart.js CDN -->
+    <!-- Chart.js & html2pdf.js CDN -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <!-- html2pdf.js for direct PDF download -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <!-- Supabase JS Client v2 -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body class="dark-theme">
     <div class="app-layout">
@@ -23,6 +24,12 @@
                     <h2>ADCEYLORA</h2>
                     <span>ECO FOOD • SRI LANKA</span>
                 </div>
+            </div>
+
+            <!-- Cloud Connection Status Indicator -->
+            <div class="connection-status-pill" id="cloudStatusBadge">
+                <span class="status-dot"></span>
+                <span id="cloudStatusText">Supabase සක්‍රීයයි (Online)</span>
             </div>
 
             <nav class="nav-menu">
@@ -61,7 +68,7 @@
                     <div class="user-avatar"><i class="fa-solid fa-user-shield"></i></div>
                     <div class="user-info">
                         <strong>ADCEYLORA Admin</strong>
-                        <small>Official Active</small>
+                        <small>Cloud Synced</small>
                     </div>
                 </div>
             </div>
@@ -97,7 +104,7 @@
                     <div class="view-header">
                         <div>
                             <h1>ADCEYLORA ECO FOOD • ව්‍යාපාර දළ විශ්ලේෂණය</h1>
-                            <p class="subtitle">ස්වාභාවික සහ විජලනය කළ ආහාර නිෂ්පාදන තොග තත්‍ය කාලීන වාර්තාව</p>
+                            <p class="subtitle">Supabase Cloud Database මඟින් සජීවීව යාවත්කාලීන වන තොග වාර්තාව</p>
                         </div>
                         <div class="view-actions">
                             <button class="btn btn-secondary" onclick="exportDataCSV()">
@@ -192,7 +199,7 @@
                     <div class="view-header">
                         <div>
                             <h1>ADCEYLORA ECO FOOD නිෂ්පාදන නාමාවලිය</h1>
-                            <p class="subtitle">විජලනය කළ ආහාර, ඖෂධීය නිෂ්පාදන සහ කුළුබඩු තොරතුරු කළමනාකරණය</p>
+                            <p class="subtitle">Cloud Database සමඟ සම්බන්ධිත නිෂ්පාදන තොරතුරු කළමනාකරණය</p>
                         </div>
                         <button class="btn btn-primary" onclick="openProductModal()">
                             <i class="fa-solid fa-plus"></i> නව නිෂ්පාදනයක්
@@ -242,7 +249,7 @@
                     <div class="view-header">
                         <div>
                             <h1>තොග ගැලපුම් හා විගණන (Stock Adjustments)</h1>
-                            <p class="subtitle">නිෂ්පාදන ඇසුරුම්කරණය හා තොග අඩුවැඩි වීම් සටහන් කිරීම</p>
+                            <p class="subtitle">නිෂ්පාදන ඇසුරුම්කරණය හා තොග අඩුවැඩි වීම් ක්ලවුඩ් ඩේටාබේස්හි සටහන් කිරීම</p>
                         </div>
                     </div>
 
@@ -466,7 +473,7 @@
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" onclick="closeModal('productModal')">අවලංගු කරන්න</button>
-                        <button type="submit" class="btn btn-primary">සුරකින්න</button>
+                        <button type="submit" class="btn btn-primary" id="btnSaveProduct">සුරකින්න</button>
                     </div>
                 </form>
             </div>
@@ -492,7 +499,7 @@
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" onclick="closeModal('categoryModal')">අවලංගු කරන්න</button>
-                        <button type="submit" class="btn btn-primary">එක් කරන්න</button>
+                        <button type="submit" class="btn btn-primary" id="btnSaveCategory">එක් කරන්න</button>
                     </div>
                 </form>
             </div>
@@ -528,7 +535,7 @@
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" onclick="closeModal('adjustStockModal')">අවලංගු කරන්න</button>
-                        <button type="submit" class="btn btn-primary">තහවුරු කරන්න</button>
+                        <button type="submit" class="btn btn-primary" id="btnConfirmAdjust">තහවුරු කරන්න</button>
                     </div>
                 </form>
             </div>
